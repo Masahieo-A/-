@@ -2,12 +2,28 @@
 
 import { useMemo, useState } from "react";
 
-type GrammarFocus = {
-  id: string;
+type GrammarId =
+  | "auto"
+  | "tense"
+  | "inanimate-subject"
+  | "present-perfect"
+  | "conditional"
+  | "progressive"
+  | "future"
+  | "passive"
+  | "infinitive"
+  | "structure";
+
+type GrammarOption = {
+  id: GrammarId;
   label: string;
   description: string;
+  keywords: string;
+};
+
+type GrammarFocus = GrammarOption & {
   detector: (sentence: string) => boolean;
-  blanker: (sentence: string) => ExerciseDraft | null;
+  blanker: (sentence: string, blankCount: number) => ExerciseDraft | null;
 };
 
 type ExerciseDraft = {
@@ -17,6 +33,11 @@ type ExerciseDraft = {
   tip: string;
   explanation: string;
   wordsToUse: string;
+};
+
+type SentenceSetting = {
+  grammarId: GrammarId;
+  blankCount: number;
 };
 
 const fewShotExamples = [
@@ -51,132 +72,256 @@ const fewShotExamples = [
 ];
 
 const sampleInput =
-  "She has lived in Kyoto for three years.\nIf it rains tomorrow, we will stay home.\nI am studying English now.";
+  "Self-driving cars will make transportation safer.\nShe has lived in Kyoto for three years.\nIf it rains tomorrow, we will stay home.";
 
-const tokenPatterns = {
-  presentPerfect: /\b(has|have)\s+([a-z]+(?:ed|en)|been|done|gone|seen|written|known|lived|studied|visited|worked)\b/i,
-  conditional: /\bIf\s+([^,.]+),\s*([^.!?]+)/i,
-  progressive: /\b(am|are|is)\s+([a-z]+ing)\b/i,
-  future: /\b(will)\s+([a-z]+)\b/i,
-  passive: /\b(am|are|is|was|were|be|been)\s+([a-z]+ed|made|known|seen|written|built|given|called)\b/i,
-  infinitive: /\b(to)\s+([a-z]+)\b/i,
-};
+const blankCountOptions = [1, 2, 3, 4];
 
-const grammarFocuses: GrammarFocus[] = [
+const grammarOptions: GrammarOption[] = [
   {
-    id: "conditional",
-    label: "時・条件の副詞節",
-    description: "if / when 節では、未来の内容でも現在形を使う点に注目します。",
-    detector: (sentence) => tokenPatterns.conditional.test(sentence),
-    blanker: (sentence) => {
-      const match = sentence.match(tokenPatterns.conditional);
-      if (!match) return null;
-      return {
-        japanese: "もし明日雨が降れば、私たちは家にいるだろう。",
-        cloze: sentence.replace(/\bIf\b/i, "( )").replace(/\bwill\b/i, "( )"),
-        answer: "If / will",
-        tip: "条件を表すまとまりはどこまで? 主節で未来の内容を表す助動詞は?",
-        explanation:
-          "条件を表す if 節では、未来の内容でも現在形を使う。主節では will do を用いて、未来に起こると考えられることを表す。",
-        wordsToUse: "if / will / present tense / main clause",
-      };
-    },
+    id: "auto",
+    label: "自動判定",
+    description: "英文内の目印からサービス側が文法項目を推定します。",
+    keywords: "文法項目を指定しない場合",
+  },
+  {
+    id: "tense",
+    label: "時制",
+    description: "現在・過去・未来・完了など、時間の捉え方を中心に問います。",
+    keywords: "yesterday / now / will / for / since",
+  },
+  {
+    id: "inanimate-subject",
+    label: "無生物主語",
+    description: "人ではない主語が、どのような結果や変化を引き起こすかを問います。",
+    keywords: "make / bring / allow / prevent / cause",
   },
   {
     id: "present-perfect",
     label: "現在完了形",
     description: "過去から現在へのつながりを has/have done で考えます。",
-    detector: (sentence) => tokenPatterns.presentPerfect.test(sentence),
-    blanker: (sentence) => {
-      const match = sentence.match(tokenPatterns.presentPerfect);
-      if (!match) return null;
-      const auxiliary = match[1];
-      const participle = match[2];
-      return {
-        japanese: "過去に始まった状態・経験・完了が、現在とどうつながっているかを考える英文。",
-        cloze: sentence.replace(match[0], `( ) ( )`),
-        answer: `${auxiliary} / ${participle}`,
-        tip: "過去の一点だけを述べている? それとも現在とのつながりを述べている? 主語に合わせる助動詞は?",
-        explanation:
-          "現在完了形は has/have + 過去分詞で表す。for や since など期間を表す語句があるときは、過去から現在まで続く状態として考える。",
-        wordsToUse: "has / have / past participle / for / since",
-      };
-    },
+    keywords: "has / have + 過去分詞",
+  },
+  {
+    id: "conditional",
+    label: "時・条件の副詞節",
+    description: "if / when 節では、未来の内容でも現在形を使う点に注目します。",
+    keywords: "if / when / unless",
   },
   {
     id: "progressive",
     label: "進行形",
     description: "am/are/is doing で、今まさに進行中の動作を表します。",
-    detector: (sentence) => tokenPatterns.progressive.test(sentence),
-    blanker: (sentence) => {
-      const match = sentence.match(tokenPatterns.progressive);
-      if (!match) return null;
-      return {
-        japanese: "今まさに行われている動作を表す英文。",
-        cloze: sentence.replace(match[0], "( ) ( )"),
-        answer: `${match[1]} / ${match[2]}`,
-        tip: "「今しているところ」を表す形は? be 動詞は主語に合わせてどう変える?",
-        explanation:
-          "現在進行形は am/are/is doing の形で、今まさに行われている動作や一時的な状況を表す。",
-        wordsToUse: "am / are / is / doing / now",
-      };
-    },
+    keywords: "be + doing",
   },
   {
     id: "future",
     label: "未来表現",
-    description: "will do を使い、これから起こると考えられることを表します。",
-    detector: (sentence) => tokenPatterns.future.test(sentence),
-    blanker: (sentence) => {
-      const match = sentence.match(tokenPatterns.future);
-      if (!match) return null;
-      return {
-        japanese: "未来に起こると予想される事柄を表す英文。",
-        cloze: sentence.replace(match[0], "( ) ( )"),
-        answer: `${match[1]} / ${match[2]}`,
-        tip: "「〜するだろう」と未来の予想を表す助動詞は? 助動詞の後ろの動詞の形は?",
-        explanation:
-          "will do は未来に起こると予想される事柄を表す一般的な形。助動詞 will の後ろには動詞の原形を置く。",
-        wordsToUse: "will / base verb / tomorrow / next",
-      };
-    },
+    description: "will do / be going to do など、これから起こることを表します。",
+    keywords: "will / be going to",
   },
   {
     id: "passive",
     label: "受動態",
     description: "be done で「〜される」を作るときの be 動詞と過去分詞に注目します。",
-    detector: (sentence) => tokenPatterns.passive.test(sentence),
-    blanker: (sentence) => {
-      const match = sentence.match(tokenPatterns.passive);
-      if (!match) return null;
-      return {
-        japanese: "主語が動作を受ける側になっている英文。",
-        cloze: sentence.replace(match[0], "( ) ( )"),
-        answer: `${match[1]} / ${match[2]}`,
-        tip: "主語は動作をする側? される側? 「〜される」を表す基本の形は?",
-        explanation:
-          "受動態は be 動詞 + 過去分詞で表す。be 動詞は主語と時制に合わせて、過去分詞は動詞ごとの形を確認する。",
-        wordsToUse: "be / past participle / by",
-      };
-    },
+    keywords: "be + 過去分詞",
   },
   {
     id: "infinitive",
     label: "不定詞",
     description: "to do が目的・原因・名詞的用法など、文中で何の働きをするかを考えます。",
+    keywords: "to + 動詞の原形",
+  },
+  {
+    id: "structure",
+    label: "文構造・語法",
+    description: "主語・動詞・目的語・修飾語の関係や語法を問います。",
+    keywords: "SVOC / 前置詞 / 語法",
+  },
+];
+
+const tokenPatterns = {
+  presentPerfect: /\b(has|have)\s+([a-z]+(?:ed|en)|been|done|gone|seen|written|known|lived|studied|visited|worked)\b/i,
+  conditional: /\b(If|When|Unless)\s+([^,.]+),\s*([^.!?]+)/i,
+  progressive: /\b(am|are|is)\s+([a-z]+ing)\b/i,
+  future: /\b(will)\s+([a-z]+)\b/i,
+  passive: /\b(am|are|is|was|were|be|been)\s+([a-z]+ed|made|known|seen|written|built|given|called)\b/i,
+  infinitive: /\b(to)\s+([a-z]+)\b/i,
+  tense: /\b(will|yesterday|tomorrow|now|ago|for|since|last|next|has|have|was|were|is|are|am)\b/i,
+  inanimateSubject: /^(Self-driving cars|This|That|The [A-Z]?[a-z-]+|[A-Z][a-z-]+(?:ing)? [a-z-]+)\s+(will\s+)?(make|made|makes|bring|brings|brought|allow|allows|allowed|prevent|prevents|prevented|cause|causes|caused)\b/i,
+};
+
+function getGrammarOption(grammarId: GrammarId) {
+  return grammarOptions.find((option) => option.id === grammarId) ?? grammarOptions[0];
+}
+
+function uniqueByIndex(indexes: number[], max: number) {
+  return [...new Set(indexes)].filter((index) => index >= 0 && index < max);
+}
+
+function tokenize(sentence: string) {
+  return sentence.match(/[A-Za-z']+|[^A-Za-z']+/g) ?? [sentence];
+}
+
+function applyBlanks(sentence: string, preferredWords: string[], blankCount: number) {
+  const tokens = tokenize(sentence);
+  const preferredIndexes = preferredWords
+    .map((preferredWord) =>
+      tokens.findIndex((token) => token.toLowerCase() === preferredWord.toLowerCase()),
+    )
+    .filter((index) => index >= 0);
+  const contentIndexes = tokens
+    .map((token, index) => ({ token, index }))
+    .filter(({ token }) => /^[A-Za-z']+$/.test(token) && token.length > 3)
+    .map(({ index }) => index);
+  const shortWordIndexes = tokens
+    .map((token, index) => ({ token, index }))
+    .filter(({ token }) => /^[A-Za-z']+$/.test(token))
+    .map(({ index }) => index);
+  const selectedIndexes = uniqueByIndex(
+    [...preferredIndexes, ...contentIndexes, ...shortWordIndexes],
+    tokens.length,
+  ).slice(0, blankCount);
+  const answers = selectedIndexes.map((index) => tokens[index]);
+  const cloze = tokens
+    .map((token, index) => (selectedIndexes.includes(index) ? "( )" : token))
+    .join("");
+
+  return {
+    cloze,
+    answer: answers.join(" / ") || sentence,
+  };
+}
+
+function makeDraftFromFocus(
+  sentence: string,
+  blankCount: number,
+  preferredWords: string[],
+  draft: Omit<ExerciseDraft, "cloze" | "answer">,
+): ExerciseDraft {
+  return {
+    ...draft,
+    ...applyBlanks(sentence, preferredWords, blankCount),
+  };
+}
+
+const grammarFocuses: GrammarFocus[] = [
+  {
+    ...getGrammarOption("conditional"),
+    detector: (sentence) => tokenPatterns.conditional.test(sentence),
+    blanker: (sentence, blankCount) => {
+      const match = sentence.match(tokenPatterns.conditional);
+      if (!match) return null;
+      return makeDraftFromFocus(sentence, blankCount, [match[1], "will"], {
+        japanese: "時・条件を表す節と主節の時制関係を確認する英文。",
+        tip: "条件を表すまとまりはどこまで? 未来の内容でも副詞節内はどの時制にする? 主節では未来をどう表す?",
+        explanation:
+          "時・条件を表す副詞節では、未来の内容でも現在形を使う。主節では will do などで未来に起こることを表す。",
+        wordsToUse: "if / when / present tense / will / main clause",
+      });
+    },
+  },
+  {
+    ...getGrammarOption("present-perfect"),
+    detector: (sentence) => tokenPatterns.presentPerfect.test(sentence),
+    blanker: (sentence, blankCount) => {
+      const match = sentence.match(tokenPatterns.presentPerfect);
+      if (!match) return null;
+      return makeDraftFromFocus(sentence, blankCount, [match[1], match[2], "for", "since"], {
+        japanese: "過去に始まった状態・経験・完了が、現在とどうつながっているかを考える英文。",
+        tip: "過去の一点だけを述べている? それとも現在とのつながりを述べている? 主語に合わせる助動詞は?",
+        explanation:
+          "現在完了形は has/have + 過去分詞で表す。for や since など期間を表す語句があるときは、過去から現在まで続く状態として考える。",
+        wordsToUse: "has / have / past participle / for / since",
+      });
+    },
+  },
+  {
+    ...getGrammarOption("progressive"),
+    detector: (sentence) => tokenPatterns.progressive.test(sentence),
+    blanker: (sentence, blankCount) => {
+      const match = sentence.match(tokenPatterns.progressive);
+      if (!match) return null;
+      return makeDraftFromFocus(sentence, blankCount, [match[1], match[2], "now"], {
+        japanese: "今まさに行われている動作を表す英文。",
+        tip: "「今しているところ」を表す形は? be 動詞は主語に合わせてどう変える? 動詞の語尾は?",
+        explanation:
+          "現在進行形は am/are/is doing の形で、今まさに行われている動作や一時的な状況を表す。",
+        wordsToUse: "am / are / is / doing / now",
+      });
+    },
+  },
+  {
+    ...getGrammarOption("future"),
+    detector: (sentence) => tokenPatterns.future.test(sentence),
+    blanker: (sentence, blankCount) => {
+      const match = sentence.match(tokenPatterns.future);
+      if (!match) return null;
+      return makeDraftFromFocus(sentence, blankCount, [match[1], match[2], "tomorrow", "next"], {
+        japanese: "未来に起こると予想される事柄を表す英文。",
+        tip: "「〜するだろう」と未来の予想を表す助動詞は? 助動詞の後ろの動詞の形は?",
+        explanation:
+          "will do は未来に起こると予想される事柄を表す一般的な形。助動詞 will の後ろには動詞の原形を置く。",
+        wordsToUse: "will / base verb / tomorrow / next",
+      });
+    },
+  },
+  {
+    ...getGrammarOption("passive"),
+    detector: (sentence) => tokenPatterns.passive.test(sentence),
+    blanker: (sentence, blankCount) => {
+      const match = sentence.match(tokenPatterns.passive);
+      if (!match) return null;
+      return makeDraftFromFocus(sentence, blankCount, [match[1], match[2], "by"], {
+        japanese: "主語が動作を受ける側になっている英文。",
+        tip: "主語は動作をする側? される側? 「〜される」を表す基本の形は?",
+        explanation:
+          "受動態は be 動詞 + 過去分詞で表す。be 動詞は主語と時制に合わせて、過去分詞は動詞ごとの形を確認する。",
+        wordsToUse: "be / past participle / by",
+      });
+    },
+  },
+  {
+    ...getGrammarOption("infinitive"),
     detector: (sentence) => tokenPatterns.infinitive.test(sentence),
-    blanker: (sentence) => {
+    blanker: (sentence, blankCount) => {
       const match = sentence.match(tokenPatterns.infinitive);
       if (!match) return null;
-      return {
+      return makeDraftFromFocus(sentence, blankCount, [match[1], match[2]], {
         japanese: "to do のまとまりが文中で働いている英文。",
-        cloze: sentence.replace(match[0], "( ) ( )"),
-        answer: `${match[1]} / ${match[2]}`,
         tip: "to の後ろに続く動詞の形は? to do のまとまりは文の中で何の役割をしている?",
         explanation:
           "不定詞は to + 動詞の原形で表す。名詞・形容詞・副詞のように働き、文脈によって意味を判断する。",
         wordsToUse: "to / base verb / purpose / adjective use",
-      };
+      });
+    },
+  },
+  {
+    ...getGrammarOption("tense"),
+    detector: (sentence) => tokenPatterns.tense.test(sentence),
+    blanker: (sentence, blankCount) => {
+      const tenseWords = sentence.match(/\b(will|has|have|was|were|is|are|am|yesterday|tomorrow|now|ago|for|since|last|next)\b/gi) ?? [];
+      return makeDraftFromFocus(sentence, blankCount, tenseWords, {
+        japanese: "時を表す語句と動詞の形の対応を考える英文。",
+        tip: "この文はいつの出来事・状態を表している? 時を示す語句はどれ? その時間に合う動詞の形は?",
+        explanation:
+          "時制問題では、まず時を表す語句や文脈を見つけ、現在・過去・未来・完了・進行のどれで捉えるかを決める。",
+        wordsToUse: "tense marker / present / past / future / perfect / progressive",
+      });
+    },
+  },
+  {
+    ...getGrammarOption("inanimate-subject"),
+    detector: (sentence) => tokenPatterns.inanimateSubject.test(sentence),
+    blanker: (sentence, blankCount) => {
+      const match = sentence.match(tokenPatterns.inanimateSubject);
+      const preferred = match ? [match[1], match[3], "make", "allow", "prevent", "cause"] : ["make", "allow", "prevent", "cause"];
+      return makeDraftFromFocus(sentence, blankCount, preferred, {
+        japanese: "人ではない主語が、結果や変化を引き起こしている英文。",
+        tip: "主語は人? 物・出来事・仕組み? その主語が何を引き起こすと考える? 日本語では副詞句のように訳すと自然では?",
+        explanation:
+          "無生物主語では、物・出来事・制度などを主語にし、その主語が人や状況に与える影響を動詞で表す。日本語では「〜によって」「〜のおかげで」のように訳すことが多い。",
+        wordsToUse: "inanimate subject / make / allow / prevent / cause / result",
+      });
     },
   },
 ];
@@ -188,37 +333,42 @@ function splitIntoSentences(input: string) {
     .filter(Boolean);
 }
 
-function fallbackExercise(sentence: string): ExerciseDraft {
-  const words = sentence.match(/[A-Za-z']+|[^A-Za-z']+/g) ?? [sentence];
-  const wordIndex = words.findIndex((word) => /^[A-Za-z']+$/.test(word) && word.length > 4);
-  const targetIndex = wordIndex >= 0 ? wordIndex : words.findIndex((word) => /^[A-Za-z']+$/.test(word));
-  const answer = targetIndex >= 0 ? words[targetIndex] : sentence;
-  const cloze = targetIndex >= 0 ? words.map((word, index) => (index === targetIndex ? "( )" : word)).join("") : "( )";
+function fallbackExercise(sentence: string, blankCount: number, grammarId: GrammarId = "structure"): ExerciseDraft {
+  const option = getGrammarOption(grammarId === "auto" ? "structure" : grammarId);
+  const preferredWords = option.id === "inanimate-subject" ? ["make", "allow", "prevent", "cause"] : [];
 
-  return {
-    japanese: "入力英文の文構造を確認する問題。",
-    cloze,
-    answer,
-    tip: "空欄の語は、文の中で主語・動詞・目的語・修飾語のどの役割をしている? 前後の語とのつながりは?",
+  return makeDraftFromFocus(sentence, blankCount, preferredWords, {
+    japanese: `${option.label}を意識して、入力英文の文構造を確認する問題。`,
+    tip: `今回は「${option.label}」がポイント。空欄の語は、文の中でどの役割をしている? 前後の語とのつながりは?`,
     explanation:
-      "英文を語順だけで暗記せず、空欄の前後にある語句との関係から必要な品詞と形を判断する。",
-    wordsToUse: "subject / verb / object / modifier",
-  };
+      "英文を語順だけで暗記せず、指定された文法項目と空欄の前後関係から必要な品詞・形・意味を判断する。",
+    wordsToUse: option.keywords,
+  });
 }
 
-function makeExercise(sentence: string) {
-  const focus = grammarFocuses.find((item) => item.detector(sentence));
-  const draft = focus?.blanker(sentence) ?? fallbackExercise(sentence);
+function resolveFocus(sentence: string, grammarId: GrammarId) {
+  if (grammarId !== "auto") {
+    return grammarFocuses.find((item) => item.id === grammarId) ?? null;
+  }
+
+  return grammarFocuses.find((item) => item.detector(sentence)) ?? null;
+}
+
+function makeExercise(sentence: string, grammarId: GrammarId, blankCount: number) {
+  const focus = resolveFocus(sentence, grammarId);
+  const draft = focus?.blanker(sentence, blankCount) ?? fallbackExercise(sentence, blankCount, grammarId);
+  const option = focus ?? getGrammarOption(grammarId === "auto" ? "structure" : grammarId);
 
   return {
     sentence,
-    focus: focus?.label ?? "文構造・語法",
-    description: focus?.description ?? "前後関係から必要な語・形・意味を考えます。",
+    focus: option.label,
+    description: option.description,
+    requestedBlankCount: blankCount,
     ...draft,
   };
 }
 
-function makeFewShotPrompt(input: string) {
+function makeFewShotPrompt(input: string, grammarLabel: string, blankCountLabel: string) {
   const examples = fewShotExamples
     .map(
       (example, index) =>
@@ -226,31 +376,64 @@ function makeFewShotPrompt(input: string) {
     )
     .join("\n\n");
 
-  return `あなたは高校英文法教材の作問者です。以下の例のトーンに合わせ、英文を空欄補充問題にします。\n\n${examples}\n\n制約:\n- 答えを直接教えすぎず、「何に注目するか」を疑問文で誘導する。\n- 空欄は文法判断が必要な語句に置く。\n- 解説は、なぜその形になるかを簡潔に述べる。\n\n入力英文:\n${input}`;
+  return `あなたは高校英文法教材の作問者です。以下の例のトーンに合わせ、英文を空欄補充問題にします。\n\n${examples}\n\n制約:\n- 指定された文法事項を最優先し、同じ英文でも文法事項によって空欄位置とTipを変える。\n- 空欄数は指定数を目安にする。\n- 答えを直接教えすぎず、「何に注目するか」を疑問文で誘導する。\n- 解説は、なぜその形になるかを簡潔に述べる。\n\n文法事項: ${grammarLabel}\n空欄数: ${blankCountLabel}\n入力英文:\n${input}`;
 }
 
 export default function HomePage() {
   const [input, setInput] = useState(sampleInput);
-  const exercises = useMemo(() => splitIntoSentences(input).map(makeExercise), [input]);
-  const prompt = useMemo(() => makeFewShotPrompt(input), [input]);
+  const [settingMode, setSettingMode] = useState<"bulk" | "individual">("bulk");
+  const [bulkGrammarId, setBulkGrammarId] = useState<GrammarId>("auto");
+  const [bulkBlankCount, setBulkBlankCount] = useState(2);
+  const [sentenceSettings, setSentenceSettings] = useState<Record<number, SentenceSetting>>({});
+  const sentences = useMemo(() => splitIntoSentences(input), [input]);
+
+  const exercises = useMemo(
+    () =>
+      sentences.map((sentence, index) => {
+        const individual = sentenceSettings[index];
+        const grammarId = settingMode === "individual" ? individual?.grammarId ?? bulkGrammarId : bulkGrammarId;
+        const blankCount = settingMode === "individual" ? individual?.blankCount ?? bulkBlankCount : bulkBlankCount;
+        return makeExercise(sentence, grammarId, blankCount);
+      }),
+    [bulkBlankCount, bulkGrammarId, sentenceSettings, sentences, settingMode],
+  );
+  const prompt = useMemo(() => {
+    const grammarLabel =
+      settingMode === "bulk"
+        ? getGrammarOption(bulkGrammarId).label
+        : "文ごとに個別指定";
+    const blankCountLabel = settingMode === "bulk" ? `${bulkBlankCount}個` : "文ごとに個別指定";
+    return makeFewShotPrompt(input, grammarLabel, blankCountLabel);
+  }, [bulkBlankCount, bulkGrammarId, input, settingMode]);
+
+  function updateSentenceSetting(index: number, patch: Partial<SentenceSetting>) {
+    setSentenceSettings((current) => ({
+      ...current,
+      [index]: {
+        grammarId: current[index]?.grammarId ?? bulkGrammarId,
+        blankCount: current[index]?.blankCount ?? bulkBlankCount,
+        ...patch,
+      },
+    }));
+  }
 
   return (
     <div className="stack">
       <section className="hero insight-hero">
         <div>
           <p className="eyebrow">Insight-style grammar generator</p>
-          <h1>英文から「思考のヒント」付き空欄補充問題を生成</h1>
+          <h1>文法項目を指定して「思考のヒント」付き問題を生成</h1>
           <p className="lead">
-            Google スプレッドシートで確認した文字起こしデータのトーンを few-shot prompt として整理し、入力英文から疑似 Vision Quest Insight 風の問題を作ります。
+            同じ英文でも、時制を問うのか、無生物主語を問うのかで空欄位置と Tip は変わります。文法項目と空欄数を指定して、意図に合う疑似 Vision Quest Insight 風の問題を作ります。
           </p>
         </div>
         <div className="upload-card prompt-card">
           <p className="upload-title">生成ポリシー</p>
           <p className="upload-subtitle">
-            正解暗記ではなく、「どの文法判断をすればよいか」を問いかける Tip を中心に出力します。
+            まず文法項目を確定し、その文法判断に必要な語句を空欄化。Tip は「どこに注目すべきか」を問いかけます。
           </p>
-          <span className="pill">few-shot</span>
-          <span className="pill">cloze</span>
+          <span className="pill">grammar-aware</span>
+          <span className="pill">blank count</span>
           <span className="pill">thinking hint</span>
         </div>
       </section>
@@ -259,7 +442,7 @@ export default function HomePage() {
         <div className="panel">
           <div className="section-heading">
             <p className="eyebrow">Input</p>
-            <h2>英文を入力</h2>
+            <h2>例文をまとめて入力</h2>
           </div>
           <textarea
             className="sentence-input"
@@ -273,13 +456,128 @@ export default function HomePage() {
           </p>
         </div>
 
-        <div className="panel prompt-preview">
+        <div className="panel settings-panel">
           <div className="section-heading">
-            <p className="eyebrow">Few-shot prompt</p>
-            <h2>参照トーン</h2>
+            <p className="eyebrow">Grammar settings</p>
+            <h2>文法項目と空欄数</h2>
           </div>
-          <pre>{prompt}</pre>
+
+          <div className="mode-toggle" aria-label="文法項目と空欄数の設定方法">
+            <label className={settingMode === "bulk" ? "mode-option selected" : "mode-option"}>
+              <input
+                checked={settingMode === "bulk"}
+                onChange={() => setSettingMode("bulk")}
+                type="checkbox"
+              />
+              まとめて設定する
+            </label>
+            <label className={settingMode === "individual" ? "mode-option selected" : "mode-option"}>
+              <input
+                checked={settingMode === "individual"}
+                onChange={() => setSettingMode("individual")}
+                type="checkbox"
+              />
+              個別に設定する
+            </label>
+          </div>
+
+          <div className="control-grid">
+            <label>
+              <span>文法項目</span>
+              <select
+                value={bulkGrammarId}
+                onChange={(event) => setBulkGrammarId(event.target.value as GrammarId)}
+              >
+                {grammarOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>空欄数</span>
+              <select
+                value={bulkBlankCount}
+                onChange={(event) => setBulkBlankCount(Number(event.target.value))}
+              >
+                {blankCountOptions.map((count) => (
+                  <option key={count} value={count}>
+                    {count}個
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className="helper-text">
+            「個別に設定する」を選ぶと、下の文別設定で各英文ごとに文法項目と空欄数を上書きできます。
+          </p>
         </div>
+      </section>
+
+      <section className="panel sentence-settings">
+        <div className="section-heading">
+          <p className="eyebrow">Sentence controls</p>
+          <h2>文ごとの設定</h2>
+        </div>
+        <div className="sentence-setting-list">
+          {sentences.map((sentence, index) => {
+            const current = sentenceSettings[index] ?? {
+              grammarId: bulkGrammarId,
+              blankCount: bulkBlankCount,
+            };
+            const disabled = settingMode === "bulk";
+
+            return (
+              <div className="sentence-setting-row" key={`${sentence}-${index}`}>
+                <div className="sentence-preview">
+                  <span>文{index + 1}</span>
+                  <p>{sentence}</p>
+                </div>
+                <label>
+                  <span>文法項目</span>
+                  <select
+                    disabled={disabled}
+                    value={current.grammarId}
+                    onChange={(event) =>
+                      updateSentenceSetting(index, { grammarId: event.target.value as GrammarId })
+                    }
+                  >
+                    {grammarOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>空欄数</span>
+                  <select
+                    disabled={disabled}
+                    value={current.blankCount}
+                    onChange={(event) =>
+                      updateSentenceSetting(index, { blankCount: Number(event.target.value) })
+                    }
+                  >
+                    {blankCountOptions.map((count) => (
+                      <option key={count} value={count}>
+                        {count}個
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="panel prompt-preview">
+        <div className="section-heading">
+          <p className="eyebrow">Few-shot prompt</p>
+          <h2>参照トーン</h2>
+        </div>
+        <pre>{prompt}</pre>
       </section>
 
       <section className="output-section" id="generated-exercises">
@@ -298,6 +596,14 @@ export default function HomePage() {
                 </div>
               </div>
               <dl className="exercise-detail">
+                <div>
+                  <dt>元英文</dt>
+                  <dd>{exercise.sentence}</dd>
+                </div>
+                <div>
+                  <dt>空欄数</dt>
+                  <dd>{exercise.requestedBlankCount}個</dd>
+                </div>
                 <div>
                   <dt>日本語</dt>
                   <dd>{exercise.japanese}</dd>
